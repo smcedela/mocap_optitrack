@@ -1,0 +1,17 @@
+# 
+# Definition of all trackable objects
+# Identifier corresponds to Trackable ID set in Tracking Tools
+#       radius: 0.0
+#
+# Abstände im Uhrzeigersinn  Anfang: Oben links
+rigid_bodies:
+    'obj4':
+        abstand: '77, 116, 123'
+        pose: obj4/pose
+        child_frame_id: obj4/mocap_link
+        parent_frame_id: world
+    'ball':
+        abstand: '71, 67, 70'
+        pose: ball/pose
+        child_frame_id: ball/mocap_link
+        parent_frame_id: world
