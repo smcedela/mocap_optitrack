@@ -13,12 +13,19 @@
 #include "mocap_optitrack/skeletons.h"
 
 // ROS includes
+#include "mocap_optitrack/socket.h"
+#include "mocap_optitrack/mocap_datapackets.h"
+#include "mocap_optitrack/mocap_config.h"
+#include "mocap_optitrack/skeletons.h"
+
+// ROS includes
 #include <ros/ros.h>
 #include <tf/transform_datatypes.h>
 #include <geometry_msgs/PointStamped.h>
 #include <tf/transform_broadcaster.h>
 #include <geometry_msgs/Pose2D.h>
 #include <unordered_map>
+#include <rosbag/bag.h>
 
 // System includes
 #include <string>
@@ -37,6 +44,8 @@ const char ** DEFAULT_MOCAP_MODEL = SKELETON_WITHOUT_TOES;
 const int LOCAL_PORT = 1511;
 ros::Publisher marker_pub;
 geometry_msgs::PointStamped marker_;
+std::vector<Marker> markers;
+bool pos = false;
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -57,7 +66,7 @@ int main( int argc, char* argv[] )
   ros::init(argc, argv, "mocap_node");
   ros::NodeHandle n("~");
 
-  // Get configuration from ROS parameter server  
+  // Get configuration from ROS parameter server
   const char** mocap_model( DEFAULT_MOCAP_MODEL );
   if( n.hasParam( MOCAP_MODEL_KEY ) )
   {    std::string tmp;
@@ -76,78 +85,84 @@ int main( int argc, char* argv[] )
   geometry_msgs::PointStamped marker_0;
   geometry_msgs::PointStamped marker_1;
   geometry_msgs::PointStamped marker_2;
+  geometry_msgs::PointStamped marker_0_time;
   
+  rosbag::Bag bag;
+  bag.open("test.bag",rosbag::bagmode::Write);
+
   vector<Object> Liste;
 
   if (n.hasParam(RIGID_BODIES_KEY))
   {
-      XmlRpc::XmlRpcValue body_list;
-      n.getParam("rigid_bodies", body_list);
-      if (body_list.getType() == XmlRpc::XmlRpcValue::TypeStruct && body_list.size() > 0)
+    XmlRpc::XmlRpcValue body_list;
+    n.getParam("rigid_bodies", body_list);
+    if (body_list.getType() == XmlRpc::XmlRpcValue::TypeStruct && body_list.size() > 0)
+    {
+      XmlRpc::XmlRpcValue::iterator i;
+      for (i = body_list.begin(); i != body_list.end(); ++i)
       {
-          XmlRpc::XmlRpcValue::iterator i;
-          for (i = body_list.begin(); i != body_list.end(); ++i) {
-              if (i->second.getType() == XmlRpc::XmlRpcValue::TypeStruct) {
-                  PublishedRigidBody body(i->second);
-                  string abstand = (string&) (i->second["abstand"]);
-                  string name = (string&) (i->first);
-	          ROS_INFO_STREAM("body " << name);
-                  
-                  // string to char*
-                  char *cstr = new char[abstand.length() + 1];
-                  strcpy(cstr, abstand.c_str());
+        if (i->second.getType() == XmlRpc::XmlRpcValue::TypeStruct)
+        {
+          PublishedRigidBody body(i->second);
+          string abstand = (string&) (i->second["abstand"]);
+          string name = (string&) (i->first);
+//          ROS_INFO_STREAM("body " << name);
 
-                  // Zahlen trennen und als int abspeichern
-                  char *pch = strtok(cstr, ",");
-                  vector<int> Abstand;
-                  while (pch != NULL)
-                  {
-                    Abstand.push_back(atoi(pch));
-                    pch = strtok (NULL, ",");
-                  }
-                  delete [] cstr;
-                  sort (Abstand.begin(), Abstand.end());
-  
-                  std::string full_param_name;
-                  vector<geometry_msgs::Point32> footprint;
-  
-                  std::string footprint_param = "/mocap_node/rigid_bodies/";
-		  footprint_param += name;
-                  footprint_param += "/footprint";
-		  
-                  if (n.searchParam(footprint_param, full_param_name))  
-                  {
-		    XmlRpc::XmlRpcValue footprint_xmlrpc;
-		    n.getParam(full_param_name, footprint_xmlrpc);
-		    if (footprint_xmlrpc.getType() == XmlRpc::XmlRpcValue::TypeArray)
-		    {
-		      geometry_msgs::Point32 pt;
+          // string to char*
+          char *cstr = new char[abstand.length() + 1];
+          strcpy(cstr, abstand.c_str());
 
-		      for (int i = 0; i < footprint_xmlrpc.size(); ++i)
-		      {
-			XmlRpc::XmlRpcValue point = footprint_xmlrpc[ i ];
-
-			pt.x = getNumberFromXMLRPC(point[ 0 ], full_param_name);
-			pt.y = getNumberFromXMLRPC(point[ 1 ], full_param_name);
-			
-			footprint.push_back(pt);
-		      }
-		    }
-                  }
-
-                  // Liste ausfüllen
-                  Liste.push_back({Abstand, name, footprint});
-
-                  RigidBodyItem item(name, body);
-
-                  std::pair<RigidBodyMap::iterator, bool> result = published_rigid_bodies.insert(item);
-                  if (!result.second)
-                  {
-                        ROS_ERROR("Could not insert configuration for rigid body ID %s", name.c_str());
-                  }
-              }
+          // Zahlen trennen und als int abspeichern
+          char *pch = strtok(cstr, ",");
+          vector<int> Abstand;
+          while (pch != NULL)
+          {
+            Abstand.push_back(atoi(pch));
+            pch = strtok (NULL, ",");
           }
+          delete [] cstr;
+          sort (Abstand.begin(), Abstand.end());
+
+          std::string full_param_name;
+          vector<geometry_msgs::Point32> footprint;
+
+          std::string footprint_param = "/mocap_node/rigid_bodies/";
+          footprint_param += name;
+          footprint_param += "/footprint";
+
+          if (n.searchParam(footprint_param, full_param_name))
+          {
+            XmlRpc::XmlRpcValue footprint_xmlrpc;
+            n.getParam(full_param_name, footprint_xmlrpc);
+            if (footprint_xmlrpc.getType() == XmlRpc::XmlRpcValue::TypeArray)
+            {
+              geometry_msgs::Point32 pt;
+
+              for (int i = 0; i < footprint_xmlrpc.size(); ++i)
+              {
+                XmlRpc::XmlRpcValue point = footprint_xmlrpc[ i ];
+
+                pt.x = getNumberFromXMLRPC(point[ 0 ], full_param_name);
+                pt.y = getNumberFromXMLRPC(point[ 1 ], full_param_name);
+
+                footprint.push_back(pt);
+              }
+            }
+          }
+
+          // Liste ausfÃ¼llen
+          Liste.push_back({Abstand, name, footprint});
+
+          RigidBodyItem item(name, body);
+
+          std::pair<RigidBodyMap::iterator, bool> result = published_rigid_bodies.insert(item);
+          if (!result.second)
+          {
+            ROS_ERROR("Could not insert configuration for rigid body ID %s", name.c_str());
+          }
+        }
       }
+    }
   }
 
   // Process mocap data until SIGINT
@@ -160,6 +175,15 @@ int main( int argc, char* argv[] )
   ros::Publisher marker_0_pub = n.advertise<geometry_msgs::PointStamped>("marker_0", 100);
   ros::Publisher marker_1_pub = n.advertise<geometry_msgs::PointStamped>("marker_1", 100);
   ros::Publisher marker_2_pub = n.advertise<geometry_msgs::PointStamped>("marker_2", 100);
+  ros::Publisher marker_0_time_pub = n.advertise<geometry_msgs::PointStamped>("marker_0_time", 100);
+  vector <int> numMarkers={};
+  vector<float> dist_sort={};
+  vector<ros::Time> integrated_Time_temp = {};
+  vector<ros::Duration> integrated_Time = {};
+  int int_time=0;
+
+  std::set<string> topics;
+
   while(ros::ok())
   {
     bool packetread = false;
@@ -169,11 +193,12 @@ int main( int argc, char* argv[] )
     {
       // Receive data from mocap device
       numBytes = multicast_client_socket.recv();
-
+//      numBytes = 1173;
       // Parse mocap data
       if( numBytes > 0 )
       {
         const char* buffer = multicast_client_socket.getBuffer();
+//        const char* buffer = "\007";
         unsigned short header = *((unsigned short*)(&buffer[0]));
 
         // Look for the beginning of a NatNet package
@@ -181,52 +206,86 @@ int main( int argc, char* argv[] )
         {
           payload = *((ushort*) &buffer[2]);
           MoCapDataFormat format(buffer, payload);
-	  format.model.known_objects = Liste;
-          format.parse();
+          //Liste contains Abstand, name and footprint
+          format.model.known_objects = Liste;
+
+          format.parse(numMarkers, dist_sort);
 
           packetread = true;
           numberOfPackets++;
+          numMarkers = format.model.output;
+          dist_sort = format.model.distance_sort;
 
           if( format.model.numOtherMarkers > 0 )
           {
+////          markers.push_back(format.model.numOtherMarkers[l]);
             for (int l = 0; l < format.model.numOtherMarkers; l++)
-  {
-      // read positions of 'other' markers
-    marker_0.point.x = format.model.otherMarkers[0].positionX;
-    marker_0.point.y = -format.model.otherMarkers[0].positionZ;
-    marker_0.point.z = format.model.otherMarkers[0].positionY;
-    marker_0.header.stamp = ros::Time::now();
-    marker_0_pub.publish(marker_0);
-    marker_1.point.x = format.model.otherMarkers[1].positionX;
-    marker_1.point.y = -format.model.otherMarkers[1].positionZ;
-    marker_1.point.z = format.model.otherMarkers[1].positionY;
-    marker_1.header.stamp = ros::Time::now();
-    marker_1_pub.publish(marker_1);
-    marker_2.point.x = format.model.otherMarkers[2].positionX;
-    marker_2.point.y = -format.model.otherMarkers[2].positionZ;
-    marker_2.point.z = format.model.otherMarkers[2].positionY;
-    marker_2.header.stamp = ros::Time::now();
-    marker_2_pub.publish(marker_2);
-    
-  }
-	   for( int i = 0; i < format.model.numRigidBodies; i++ )
-	   {
-              string name = format.model.rigidBodies[i].name;
-              RigidBodyMap::iterator item = published_rigid_bodies.find(name);
+            {
+              // read positions of 'other' markers
+              marker_0.point.x = format.model.otherMarkers[0].positionX;
+              marker_0.point.y = -format.model.otherMarkers[0].positionZ;
+              marker_0.point.z = format.model.otherMarkers[0].positionY;
+              marker_0.header.stamp = ros::Time::now();
 
-              if (item != published_rigid_bodies.end())
+//            ============================
+              marker_0_time.point.x = format.model.otherMarkers[0].positionX;
+              marker_0_time.point.y = -format.model.otherMarkers[0].positionZ;
+              marker_0_time.point.z = format.model.otherMarkers[0].positionY;
+
+              integrated_Time_temp.push_back(marker_0.header.stamp);
+              if(integrated_Time_temp.size() == 1)
               {
-		  RigidBodyOdomHelper& current_odom_helper = odom_helpers[name];
-		  
-                  item->second.publish(format.model.rigidBodies[i], current_odom_helper);
+                integrated_Time.push_back(integrated_Time_temp[int_time] - ros::Time(0));
+//                integrated_Time.push_back(integrated_Time_temp[int_time]-integrated_Time_temp[int_time]);
+                marker_0_time.header.stamp = marker_0.header.stamp;
+                int_time++;
               }
-           }
+              else
+              {
+                integrated_Time.push_back(integrated_Time_temp[int_time] - integrated_Time_temp[int_time-1]);
+                marker_0_time.header.stamp = ros::Time(0) + integrated_Time[int_time];
+                int_time++;
+              }
+              marker_0_time_pub.publish(marker_0_time);
+//            =================================
 
+              marker_0_pub.publish(marker_0);
+//              marker_1.point.x = format.model.otherMarkers[1].positionX;
+//              marker_1.point.y = -format.model.otherMarkers[1].positionZ;
+//              marker_1.point.z = format.model.otherMarkers[1].positionY;
+//              marker_1.header.stamp = ros::Time::now();
+//              marker_1_pub.publish(marker_1);
+//              marker_2.point.x = format.model.otherMarkers[2].positionX;
+//              marker_2.point.y = -format.model.otherMarkers[2].positionZ;
+//              marker_2.point.z = format.model.otherMarkers[2].positionY;
+//              marker_2.header.stamp = ros::Time::now();
+//              marker_2_pub.publish(marker_2);
             }
+
+//            if (format.model.marker_in_position){pos=true;}
+//            if (pos)
+//            {
+//              bag.open("test.bag",rosbag::bagmode::Write);
+              for( int i = 0; i < format.model.numRigidBodies; i++ )
+              {
+                string name = format.model.rigidBodies[i].name;
+                RigidBodyMap::iterator item = published_rigid_bodies.find(name);
+
+                if (item != published_rigid_bodies.end())
+                {
+                  RigidBodyOdomHelper& current_odom_helper = odom_helpers[name];
+
+                  item->second.publish(format.model.rigidBodies[i], current_odom_helper);
+                }
+//                bag.write(name+"/pose");
+              }
+//              bag.close();
+//            }
           }
         }
-        // else skip packet
-      } while( numBytes > 0 );
+      }
+      // else skip packet
+    } while( numBytes > 0 );
 
     // Don't try again immediately
     if( !packetread )
